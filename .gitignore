@@ -1,0 +1,28 @@
+# Python virtual environment
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# Playwright browser data & user sessions
+data/browser_session/
+data/browser_session/**
+.session/
+
+# Scraped output files
+data/output/*.csv
+data/output/*.xlsx
+data/output/*.json
+output/
+
+# IDE & OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

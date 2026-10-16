@@ -940,7 +940,19 @@ export default function CommentBotWorkspace({
                         {item.author_name || 'Người dùng FB'}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
-                        {item.group_name || item.group_url || 'Nhóm FB'}
+                        {item.group_url ? (
+                          <a
+                            href={item.group_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                            title={item.group_url}
+                          >
+                            {item.group_name || 'Nhóm FB'}
+                          </a>
+                        ) : (
+                          item.group_name || 'Nhóm FB'
+                        )}
                       </div>
                     </td>
                     <td style={{ padding: '10px 14px', color: 'var(--accent-blue)', fontWeight: 500 }}>
@@ -970,19 +982,37 @@ export default function CommentBotWorkspace({
                       </span>
                     </td>
                     <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                      {item.post_url ? (
-                        <a
-                          href={item.post_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          title="Mở bài viết trên Facebook"
-                          style={{ color: 'var(--accent-blue)', display: 'inline-block' }}
-                        >
-                          <ExternalLink size={14} />
-                        </a>
-                      ) : (
-                        '—'
-                      )}
+                      {(() => {
+                        const targetUrl = item.post_url || item.group_url || (item.post_id && !String(item.post_id).startsWith('-') ? `https://www.facebook.com/${item.post_id}` : null);
+                        if (!targetUrl) return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+                        const isPost = targetUrl.includes('/posts/') || targetUrl.includes('/permalink/') || (item.post_id && !String(item.post_id).startsWith('-'));
+                        return (
+                          <a
+                            href={targetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={isPost ? "Mở bài viết này trên Facebook" : "Mở nhóm Facebook"}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              padding: '5px 10px',
+                              borderRadius: 6,
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: '#60a5fa',
+                              background: 'rgba(59, 130, 246, 0.12)',
+                              border: '1px solid rgba(59, 130, 246, 0.3)',
+                              textDecoration: 'none',
+                              whiteSpace: 'nowrap',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <span>{isPost ? 'Xem bài' : 'Mở link'}</span>
+                            <ExternalLink size={12} />
+                          </a>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))

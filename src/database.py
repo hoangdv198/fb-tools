@@ -701,11 +701,25 @@ def get_group_comments_history(limit: int = 200, db_path: Optional[str] = None) 
         rows = cursor.fetchall()
         results = []
         for r in rows:
+            p_id = r[1] or ""
+            p_url = r[2] or ""
+            g_url = r[3] or ""
+            # Fallback nếu chưa có post_url
+            if not p_url:
+                if p_id and re.match(r'^\d+$', str(p_id)):
+                    if g_url:
+                        clean_g = g_url.split("?")[0].rstrip("/")
+                        p_url = f"{clean_g}/posts/{p_id}/"
+                    else:
+                        p_url = f"https://www.facebook.com/{p_id}"
+                elif g_url:
+                    p_url = g_url.split("?")[0]
+
             results.append({
                 "id": r[0],
-                "post_id": r[1] or "",
-                "post_url": r[2] or "",
-                "group_url": r[3] or "",
+                "post_id": p_id,
+                "post_url": p_url,
+                "group_url": g_url,
                 "group_name": r[4] or "",
                 "author_name": r[5] or "",
                 "content_snippet": r[6] or "",

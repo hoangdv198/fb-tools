@@ -12,6 +12,12 @@ from src.database import (
 )
 
 try:
+    from src.parser import FacebookPostParser, extract_post_id_from_url
+except ImportError:
+    FacebookPostParser = None
+    extract_post_id_from_url = None
+
+try:
     from src.ai_analyzer import generate_smart_comment, analyze_job_post, call_local_llm
 except ImportError:
     generate_smart_comment = None
@@ -293,27 +299,73 @@ class FacebookGroupCommentBot:
                         # Mở rộng 'Xem thêm'
                         self._expand_see_more(art)
 
-                        # Trích xuất nội dung bài viết
-                        full_text = art.inner_text().strip()
+                        # Trích xuất nội dung bài viết bằng parser hoặc fallback
+                        if FacebookPostParser:
+                            clean_content = FacebookPostParser.extract_content(art)
+                            author_name, author_url = FacebookPostParser.extract_author(art)
+                            p_url, p_id, _ = FacebookPostParser.extract_post_url_and_time(art)
+                        else:
+                            clean_content = ""
+                            author_name = ""
+                            author_url = ""
+                            p_url, p_id = "", ""
+
+                        full_text = clean_content if (clean_content and len(clean_content) >= 20) else art.inner_text().strip()
                         if len(full_text) < 25:
                             continue
 
-                        # Nhận diện định danh bài viết
-                        # 1. Tìm permalink bài viết nếu có
-                        post_url = ""
-                        post_id = ""
-                        try:
-                            links = art.locator('a[href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="]').all()
-                            for lk in links:
-                                href = lk.get_attribute("href") or ""
-                                if "/posts/" in href or "/permalink/" in href or "multi_permalinks=" in href:
-                                    post_url = href.split("?")[0]
-                                    m_id = re.search(r'/(?:posts|permalink)/(\d+)', href)
-                                    if m_id:
-                                        post_id = m_id.group(1)
-                                    break
-                        except Exception:
-                            pass
+                        # Nhận diện định danh bài viết & permalink
+                        post_url = p_url or ""
+                        post_id = p_id or ""
+
+                        # Quét sâu trực tiếp trong DOM qua Javascript để lấy resolved absolute href nếu chưa có
+                        if not post_url:
+                            try:
+                                found_href = art.evaluate("""(node) => {
+                                    const anchors = Array.from(node.querySelectorAll('a[href]'));
+                                    for (const a of anchors) {
+                                        const h = a.href || '';
+                                        if (h.includes('/posts/') || h.includes('/permalink/') || h.includes('multi_permalinks=') || h.includes('story_fbid=')) {
+                                            return h;
+                                        }
+                                    }
+                                    for (const a of anchors) {
+                                        const aria = (a.getAttribute('aria-label') || '').toLowerCase();
+                                        const txt = (a.innerText || '').toLowerCase();
+                                        const timeTerms = ['giờ', 'phút', 'ngày', 'vừa xong', 'ago', 'yesterday', 'just now', 'tháng'];
+                                        if (timeTerms.some(t => aria.includes(t) || txt.includes(t))) {
+                                            if (!a.href.includes('/user/') && !a.href.includes('/profile.php')) {
+                                                return a.href;
+                                            }
+                                        }
+                                    }
+                                    return '';
+                                }""")
+
+                                if found_href:
+                                    if extract_post_id_from_url:
+                                        cand_id = extract_post_id_from_url(found_href)
+                                        if cand_id:
+                                            post_id = cand_id
+                                    clean_url = found_href.split("?")[0]
+                                    if "/posts/" in clean_url or "/permalink/" in clean_url:
+                                        post_url = clean_url
+                                    elif post_id:
+                                        clean_group = raw_url.split("?")[0].rstrip("/")
+                                        post_url = f"{clean_group}/posts/{post_id}/"
+                                    else:
+                                        post_url = clean_url
+                            except Exception as ex:
+                                logger.debug(f"Lỗi extract link bài viết: {ex}")
+
+                        # Nếu vẫn chưa có post_url nhưng có post_id
+                        if not post_url and post_id:
+                            clean_group = raw_url.split("?")[0].rstrip("/")
+                            post_url = f"{clean_group}/posts/{post_id}/"
+
+                        # Nếu vẫn không có post_url, fallback về raw group url
+                        if not post_url:
+                            post_url = raw_url.split("?")[0]
 
                         # Tạo hash fallback nếu không có post_id
                         post_key = post_id or post_url or str(hash(full_text[:120]))
@@ -324,9 +376,15 @@ class FacebookGroupCommentBot:
                         stats["posts_read"] += 1
                         new_found_this_turn += 1
 
-                        # Trích xuất tên tác giả (dòng đầu tiên có thể chứa tên)
-                        lines = [line.strip() for line in full_text.splitlines() if line.strip()]
-                        author_name = lines[0] if lines else "Facebook User"
+                        # Làm sạch tên tác giả nếu bị nhận thành Facebook/logo
+                        if not author_name or author_name.lower() in ["facebook", "ẩn danh", "xem thêm", "like", "thích", "comment"]:
+                            lines = [line.strip() for line in full_text.splitlines() if line.strip()]
+                            for cl in lines:
+                                if cl.lower() not in ["facebook", "thích", "bình luận", "chia sẻ", "like", "comment", "gợi ý"]:
+                                    author_name = cl
+                                    break
+                        if not author_name:
+                            author_name = "Thành viên nhóm"
 
                         # 0. Kiểm tra xem bài viết đã từng comment chưa
                         if skip_already_commented:

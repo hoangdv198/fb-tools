@@ -1,13 +1,20 @@
-import asyncio
 import os
-from config.settings import settings
-from src.browser import get_browser_context
+import sys
+from pathlib import Path
+
+# Đảm bảo đường dẫn import
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config.settings import get_settings
+from src.browser import BrowserManager
 from src.scraper import FacebookGroupScraper
 from src.exporter import export_to_excel
 
-async def main():
+
+def main():
+    settings = get_settings()
     group_url = os.getenv("GROUP_URL", "https://www.facebook.com/groups/itjobs.vietnam")
-    max_posts = int(os.getenv("MAX_POSTS", "30"))
+    max_posts = int(os.getenv("MAX_POSTS", "20"))
     keywords = [k.strip() for k in os.getenv("KEYWORDS", "tuyển,hiring,lương,remote,developer,backend,frontend").split(",") if k.strip()]
 
     print("========================================")
@@ -17,23 +24,21 @@ async def main():
     print(f"Target posts: {max_posts}")
     print("========================================")
 
-    async with get_browser_context() as context:
-        page = await context.new_page()
-        scraper = FacebookGroupScraper(
-            page=page,
-            group_url=group_url,
-            keywords=keywords,
-            max_posts=max_posts
-        )
-        posts = await scraper.scrape()
+    manager = BrowserManager()
+    try:
+        manager.start()
+        page = manager.new_page()
+        scraper = FacebookGroupScraper(page=page)
+        posts = scraper.scrape_by_feed(group_url=group_url, keywords=keywords, limit=max_posts)
 
         if posts:
             out_file = export_to_excel(posts)
-            print(f"
-✅ Đã xuất {len(posts)} bài viết tuyển dụng ra: {out_file}")
+            print(f"\n✅ Đã xuất {len(posts)} bài viết tuyển dụng ra: {out_file}")
         else:
-            print("
-⚠️ Không tìm thấy bài viết nào khớp với từ khóa.")
+            print("\n⚠️ Không tìm thấy bài viết nào khớp với từ khóa.")
+    finally:
+        manager.close()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

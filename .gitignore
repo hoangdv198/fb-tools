@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.agents/
 
 # Environment variables
 .env
@@ -20,6 +21,12 @@ data/output/*.csv
 data/output/*.xlsx
 data/output/*.json
 output/
+
+# Database files
+*.db
+*.sqlite
+data/*.db
+data/*.sqlite
 
 # IDE & OS files
 .DS_Store

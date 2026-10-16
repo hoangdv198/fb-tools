@@ -100,9 +100,13 @@ class FacebookGroupScraper:
         limit: int = 20
     ) -> List[JobPost]:
         """Cào bài viết mới nhất trên bảng tin nhóm và lọc theo từ khóa."""
-        logger.info(f"Đang mở bảng tin nhóm: {group_url}")
-        self.page.goto(group_url, timeout=self.settings.timeout_ms)
+        clean_url = group_url.split("?")[0].rstrip("/")
+        # Ép Facebook sắp xếp theo bài viết mới nhất (Chronological)
+        feed_url = f"{clean_url}/?sorting_setting=CHRONOLOGICAL"
+        logger.info(f"Đang mở bảng tin nhóm (mới nhất): {feed_url}")
+        self.page.goto(feed_url, timeout=self.settings.timeout_ms)
         self.page.wait_for_load_state("domcontentloaded", timeout=self.settings.timeout_ms)
+
         self._random_delay()
 
         group_name = self._extract_group_name()
@@ -168,10 +172,15 @@ class FacebookGroupScraper:
                         continue
 
                     # Kiểm tra từ khóa
-                    matched = match_keywords(content, keywords)
-                    # Nếu là search mode thì mặc định bài viết do Facebook search trả về đã có liên quan
-                    if not is_search_mode and not matched:
-                        continue
+                    if keywords:
+                        matched = match_keywords(content, keywords)
+                        # Nếu là feed mode mà không khớp từ khóa thì bỏ qua
+                        if not is_search_mode and not matched:
+                            continue
+                    else:
+                        # Nếu người dùng không nhập từ khóa, thu thập tất cả bài viết
+                        matched = ["Tất cả"]
+
 
                     # Lấy thông tin URL & ID
                     post_url, post_id, posted_time = FacebookPostParser.extract_post_url_and_time(elem)
@@ -190,11 +199,13 @@ class FacebookGroupScraper:
                         group_url=group_url,
                         author_name=author_name,
                         author_url=author_url,
-                        post_url=post_url or group_url,
-                        posted_time=posted_time or "Vừa xong",
+                        post_url=post_url if (post_url and post_url != group_url) else "",
+                        posted_time=posted_time or "Không rõ",
                         content=content,
-                        matched_keywords=matched if matched else keywords,
+
+                        matched_keywords=matched if matched else ["Tất cả"],
                     )
+
 
                     collected_posts.append(job)
                     new_found_in_round += 1

@@ -1,12 +1,14 @@
 #!/bin/bash
 set -e
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-if [ -d ".venv" ]; then
-    source .venv/bin/activate
+if [ -f ".venv/bin/activate" ]; then
+    . .venv/bin/activate
+elif [ -f "venv/bin/activate" ]; then
+    . venv/bin/activate
 fi
 
 echo "🚀 Đang khởi chạy Facebook Group Job Scraper GUI..."
-streamlit run app.py --server.port 8501 --server.headless false
+python3 -m streamlit run app.py --server.port 8501 --server.h

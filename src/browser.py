@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional, Generator
+from typing import Optional, Generator, List, Dict, Any
 from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright, BrowserContext, Page, Playwright
@@ -30,13 +30,21 @@ class BrowserManager:
         headless: Optional[bool] = None,
         data_dir: Optional[Path] = None,
         channel: Optional[str] = None,
+        cookies: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
     ):
         settings = get_settings()
         self.headless = headless if headless is not None else settings.headless
         self.data_dir = data_dir or settings.browser_data_dir
         self.channel = channel or settings.browser_channel
+        self.cookies = cookies or []
         self._playwright: Optional[Playwright] = None
         self._context: Optional[BrowserContext] = None
+
+    def set_cookies(self, cookies: List[Dict[str, Any]]):
+        """Thiết lập cookies đăng nhập."""
+        self.cookies = cookies or []
+
 
     def start(self) -> BrowserContext:
         """Khởi động persistent context."""
@@ -72,7 +80,16 @@ class BrowserManager:
         # Chống nhận diện bot thông qua navigator.webdriver
         self._context.add_init_script(STEALTH_JS)
 
+        # Nạp cookies có sẵn nếu có
+        if self.cookies:
+            try:
+                self._context.add_cookies(self.cookies)
+                logger.info(f"Đã nạp {len(self.cookies)} cookies vào phiên trình duyệt.")
+            except Exception as e:
+                logger.warning(f"Lỗi khi nạp cookies: {e}")
+
         return self._context
+
 
     def close(self):
         """Đóng context và Playwright an toàn."""
@@ -109,3 +126,15 @@ def get_browser_session(headless: Optional[bool] = None) -> Generator[Page, None
         yield page
     finally:
         manager.close()
+
+
+@contextmanager
+def get_browser_context(headless: Optional[bool] = None) -> Generator[BrowserContext, None, None]:
+    """Context manager tiện lợi để lấy BrowserContext có persistent session."""
+    manager = BrowserManager(headless=headless)
+    try:
+        context = manager.start()
+        yield context
+    finally:
+        manager.close()
+

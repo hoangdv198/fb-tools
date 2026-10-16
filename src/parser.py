@@ -26,6 +26,22 @@ class JobPost:
         data["matched_keywords"] = ", ".join(self.matched_keywords)
         return data
 
+    @property
+    def id(self) -> str:
+        return self.post_id
+
+    @property
+    def url(self) -> str:
+        return self.post_url
+
+    @property
+    def author(self) -> str:
+        return self.author_name
+
+    @property
+    def timestamp_text(self) -> str:
+        return self.posted_time
+
 
 def normalize_text(text: str) -> str:
     """Chuẩn hóa chuỗi văn bản (bỏ dấu tiếng Việt, chữ thường) để so sánh từ khóa linh hoạt."""
@@ -169,38 +185,89 @@ class FacebookPostParser:
 
     @staticmethod
     def extract_post_url_and_time(post_locator: Locator) -> tuple[str, str, str]:
-        """Trích xuất permalink, post_id và thời gian đăng."""
+        """Trích xuất permalink, post_id và thời gian đăng chính xác."""
         post_url = ""
         post_id = ""
         posted_time = ""
 
-        time_link_selectors = [
+        # 1. Trích xuất post_url & post_id
+        post_link_selectors = [
             'a[href*="/posts/"]',
             'a[href*="/permalink/"]',
             'a[href*="multi_permalinks="]',
-            'a[aria-label*="trước"]',
-            'a[aria-label*="ago"]',
+            'a[href*="story_fbid="]',
         ]
 
-        for sel in time_link_selectors:
+        for sel in post_link_selectors:
             loc = post_locator.locator(sel)
             if loc.count() > 0:
-                try:
-                    for i in range(loc.count()):
-                        cand = loc.nth(i)
-                        href = cand.get_attribute("href") or ""
-                        text = cand.inner_text().strip()
-                        aria = cand.get_attribute("aria-label") or ""
+                for i in range(loc.count()):
+                    cand = loc.nth(i)
+                    href = cand.get_attribute("href") or ""
+                    if any(k in href for k in ["/posts/", "/permalink/", "multi_permalinks=", "story_fbid="]):
+                        if href.startswith("/"):
+                            href = f"https://www.facebook.com{href}"
 
-                        if "/posts/" in href or "/permalink/" in href or "multi_permalinks" in href:
-                            post_url = href.split("?")[0] if "?" in href else href
-                            post_id = extract_post_id_from_url(post_url) or ""
-                            posted_time = aria or text
-                            if post_url:
-                                break
-                except Exception:
-                    pass
+                        # Trích xuất post_id từ full href trước khi cắt query params
+                        cand_id = extract_post_id_from_url(href)
+                        if cand_id:
+                            post_id = cand_id
+
+                        clean_url = href.split("?")[0] if "?" in href else href
+                        if "/posts/" in clean_url or "/permalink/" in clean_url:
+                            post_url = clean_url
+                        elif post_id:
+                            clean_group = clean_url.rstrip("/")
+                            post_url = f"{clean_group}/posts/{post_id}/"
+                        else:
+                            post_url = ""
+                        
+                        aria = cand.get_attribute("aria-label") or ""
+                        txt = cand.inner_text().strip()
+                        if aria and not any(skip in aria.lower() for skip in ["thích", "like", "bình luận", "comment"]):
+                            posted_time = aria
+                        elif txt and not any(skip in txt.lower() for skip in ["thích", "like", "xem"]):
+                            posted_time = txt
+                        break
             if post_url:
                 break
 
+        # 2. Quét thẻ abbr, time hoặc thẻ chứa title thời gian
+        if not posted_time:
+            time_elements = post_locator.locator('abbr, time, span[title]')
+            for k in range(time_elements.count()):
+                elem = time_elements.nth(k)
+                t_attr = elem.get_attribute("title") or elem.get_attribute("aria-label") or elem.inner_text().strip()
+                if t_attr and any(k in t_attr.lower() for k in ["lúc", "trước", "phút", "giờ", "hôm", "tháng", ":", "ago", "at"]):
+                    if not any(skip in t_attr.lower() for skip in ["thích", "like", "bình luận", "comment"]):
+                        posted_time = t_attr.strip()
+                        break
+
+        # 3. Quét các phần tử mang aria-label thời gian
+        if not posted_time:
+            time_labels = post_locator.locator('[aria-label]')
+            for j in range(time_labels.count()):
+                al = time_labels.nth(j).get_attribute("aria-label") or ""
+                time_keywords = [
+                    "lúc", "trước", "vừa xong", "hôm qua", "tháng", "thứ", "chủ nhật",
+                    "ago", "yesterday", "just now", "at", "october", "november", "december",
+                    "january", "february", "march", "april", "may", "june", "july", "august", "september",
+                    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+                ]
+                if any(k in al.lower() for k in time_keywords):
+                    if not any(skip in al.lower() for skip in ["thích", "like", "bình luận", "comment", "chia sẻ", "share", "trang cá nhân", "profile"]):
+                        posted_time = al
+                        break
+
+        # 3. Quét regex từ văn bản của bài viết nếu vẫn chưa có
+        if not posted_time:
+            try:
+                full_text = post_locator.inner_text()
+                m = re.search(r'\b(\d{1,2}\s*(?:phút|giờ|ngày|giây|h|m|d)\s*(?:trước)?)\b', full_text, re.IGNORECASE)
+                if m:
+                    posted_time = m.group(1).strip()
+            except Exception:
+                pass
+
         return post_url, post_id, posted_time
+

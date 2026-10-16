@@ -120,3 +120,14 @@ class DataExporter:
         excel_path = self.export_to_excel(posts, f"{prefix}_{timestamp}.xlsx")
         csv_path = self.export_to_csv(posts, f"{prefix}_{timestamp}.csv")
         return {"excel": excel_path, "csv": csv_path}
+
+
+def export_to_excel(posts: List[Union[JobPost, Dict[str, Any]]], filename: str = None) -> Path:
+    """Hàm tiện ích để xuất nhanh ra file Excel."""
+    return DataExporter().export_to_excel(posts, filename)
+
+
+def export_to_csv(posts: List[Union[JobPost, Dict[str, Any]]], filename: str = None) -> Path:
+    """Hàm tiện ích để xuất nhanh ra file CSV."""
+    return DataExporter().export_to_csv(posts, filename)
+

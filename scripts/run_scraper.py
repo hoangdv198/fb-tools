@@ -21,6 +21,7 @@ from src.browser import BrowserManager
 from src.scraper import FacebookGroupScraper
 from src.exporter import DataExporter
 from src.parser import JobPost
+from src.chrome_profile import list_chrome_profiles, extract_facebook_cookies
 
 console = Console()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -57,12 +58,23 @@ def parse_args():
         help="Chạy trình duyệt ẩn (không mở cửa sổ hiển thị)",
     )
     parser.add_argument(
+        "--chrome-profile",
+        default=None,
+        help="Tên hoặc ID profile Google Chrome cần dùng (vd: 'Profile 4', 'Default', 'auto')",
+    )
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="Liệt kê danh sách các Profile Chrome có trên máy",
+    )
+    parser.add_argument(
         "--format",
         choices=["all", "excel", "csv"],
         default="all",
         help="Định dạng file xuất kết quả (mặc định: all)",
     )
     return parser.parse_args()
+
 
 
 def display_results_table(posts: List[JobPost]):
@@ -96,12 +108,36 @@ def main():
     args = parse_args()
     settings = get_settings()
 
+    if args.list_profiles:
+        profiles = list_chrome_profiles()
+        console.print("[bold cyan]Danh Sách Google Chrome Profiles trên máy:[/bold cyan]\n")
+        for idx, p in enumerate(profiles, 1):
+            fb_badge = "[bold green][🔥 Đã có FB][/bold green]" if p["has_facebook"] else "[dim][Chưa có FB][/dim]"
+            console.print(f"  {idx}. [yellow]{p['id']}[/yellow]: {p['name']} ({p['email']}) {fb_badge}")
+        return
+
     # Xác định các tham số đầu vào
     groups = args.groups or settings.default_groups
     keywords = args.keywords or settings.default_keywords
     mode = args.mode or settings.scrape_mode
     limit = args.limit or settings.max_posts_per_group
     headless = args.headless if args.headless else settings.headless
+
+    cookies = []
+    if args.chrome_profile:
+        profiles = list_chrome_profiles()
+        target_p = None
+        if args.chrome_profile.lower() == "auto":
+            target_p = next((p for p in profiles if p["has_facebook"]), None)
+        else:
+            target_p = next((p for p in profiles if p["id"].lower() == args.chrome_profile.lower() or p["name"].lower() == args.chrome_profile.lower()), None)
+        
+        if target_p:
+            console.print(f"[bold green]✓ Sử dụng Profile Chrome:[/bold green] [yellow]{target_p['display']}[/yellow]")
+            cookies = extract_facebook_cookies(target_p["path"])
+            console.print(f"[green]✓ Đã trích xuất {len(cookies)} cookies Facebook.[/green]")
+        else:
+            console.print(f"[bold red]Không tìm thấy Profile Chrome khớp với '{args.chrome_profile}'[/bold red]")
 
     console.print(
         Panel.fit(
@@ -116,8 +152,9 @@ def main():
         )
     )
 
-    browser_manager = BrowserManager(headless=headless)
+    browser_manager = BrowserManager(headless=headless, cookies=cookies)
     all_collected_posts: List[JobPost] = []
+
 
     try:
         browser_manager.start()

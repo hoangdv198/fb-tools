@@ -65,3 +65,9 @@ def test_job_post_to_dict():
     assert d["group_name"] == "Cộng đồng Python"
     assert d["matched_keywords"] == "python, tuyển dụng"
     assert "scraped_at" in d
+
+    # Test property aliases
+    assert post.id == "123"
+    assert post.url == "https://facebook.com/groups/python/posts/123"
+    assert post.author == "Nguyễn Văn A"
+    assert post.timestamp_text == "2 giờ trước"

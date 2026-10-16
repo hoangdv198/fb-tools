@@ -159,8 +159,8 @@ class FacebookInteractionBot:
                                     cmt_content = random.choice(comments_list)
 
                                 cmt_box.click(timeout=1000)
-                                cmt_box.type(cmt_content, delay=random.randint(60, 120))
-                                self._sleep_random(1.0, 2.0)
+                                self.page.keyboard.insert_text(cmt_content)
+                                self._sleep_random(0.8, 1.5)
                                 self.page.keyboard.press("Enter")
                                 stats["commented"] += 1
                                 log(f"💬 Đã bình luận: \"{cmt_content}\" ({stats['commented']}/{max_comments})")

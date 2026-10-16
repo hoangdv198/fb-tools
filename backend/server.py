@@ -23,6 +23,7 @@ from src.browser import BrowserManager
 from src.scraper import FacebookGroupScraper
 from src.interaction_bot import FacebookInteractionBot
 from src.group_friend_bot import FacebookGroupFriendBot
+from src.group_comment_bot import FacebookGroupCommentBot
 from src.ai_analyzer import analyze_job_post, generate_smart_comment, call_local_llm, interact_with_database_agent
 from src.database import (
     init_db,
@@ -36,6 +37,10 @@ from src.database import (
     save_friend_request,
     get_sent_friend_requests,
     clear_friend_requests,
+    save_group_comment,
+    get_commented_post_ids,
+    get_group_comments_history,
+    clear_group_comments_history,
 )
 
 app = FastAPI(title="Facebook Automation Suite API", version="2.0.0")
@@ -55,16 +60,41 @@ def extract_contacts(text: str):
     emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', str(text))
     return ", ".join(dict.fromkeys(phones)), ", ".join(dict.fromkeys(emails))
 
+def get_cookies_with_fallback(profile_path: Optional[str] = None):
+    """Lấy cookies từ profile chỉ định, nếu rỗng thì tự động tìm profile có Facebook."""
+    if profile_path and os.path.exists(profile_path):
+        cookies = extract_facebook_cookies(profile_path)
+        if cookies:
+            return cookies, profile_path
+
+    # Tự động chọn profile có Facebook
+    try:
+        profiles = list_chrome_profiles()
+        for p in profiles:
+            if p.get("has_facebook"):
+                c = extract_facebook_cookies(str(p["path"]))
+                if c:
+                    return c, str(p["path"])
+        if profiles:
+            return extract_facebook_cookies(str(profiles[0]["path"])), str(profiles[0]["path"])
+    except Exception as e:
+        logger.warning(f"Lỗi fallback profile: {e}")
+
+    return [], profile_path
+
+
 # Trạng thái tác vụ nền
 running_tasks: Dict[str, Any] = {
     "scraper": {"running": False, "progress": 0, "logs": [], "total_scraped": 0},
     "bot": {"running": False, "logs": [], "stats": {}},
-    "friend_bot": {"running": False, "logs": [], "stats": {}}
+    "friend_bot": {"running": False, "logs": [], "stats": {}},
+    "comment_bot": {"running": False, "logs": [], "stats": {"commented": 0, "liked": 0, "skipped": 0, "errors": 0, "total_target": 10}}
 }
 
 active_bot_instances: Dict[str, Any] = {
     "friend_bot": None,
-    "bot": None
+    "bot": None,
+    "comment_bot": None
 }
 
 # --- Pydantic Schemas ---
@@ -107,6 +137,28 @@ class FriendBotRequest(BaseModel):
     filter_mode: str = "all"
     skip_already_sent: bool = True
     headless: bool = False
+
+class CommentBotRequest(BaseModel):
+    profile_path: Optional[str] = None
+    group_urls: List[str]
+    max_comments: int = 10
+    delay_min: float = 15.0
+    delay_max: float = 30.0
+    mode: str = "ai"  # "ai" or "template"
+    ai_persona: str = "ứng viên xin việc chuyên nghiệp"
+    ai_custom_prompt: Optional[str] = None
+    templates: List[str] = [
+        "Quan tâm ạ, cho mình xin thêm thông tin chi tiết với nhé!",
+        "Up bài giúp bạn nhé, bài viết rất hữu ích!",
+        "Chấm bài ạ, inbox mình thêm thông tin với nhé bạn!",
+        "Chào bạn, mình rất quan tâm, check tin nhắn mình nhé!"
+    ]
+    keywords: List[str] = []
+    filter_scam: bool = True
+    auto_like: bool = True
+    skip_already_commented: bool = True
+    headless: bool = False
+
 
 class AIChatRequest(BaseModel):
     message: str
@@ -400,6 +452,111 @@ def get_friend_history(limit: int = 200):
 @app.post("/api/friend-bot/history/clear")
 def clear_friend_history():
     success = clear_friend_requests()
+    return {"success": success}
+
+# --- Group Auto-Comment Bot ---
+@app.get("/api/comment-bot/status")
+def get_comment_bot_status():
+    return running_tasks["comment_bot"]
+
+@app.post("/api/comment-bot/stop")
+def stop_comment_bot():
+    running_tasks["comment_bot"]["running"] = False
+    if active_bot_instances.get("comment_bot"):
+        try:
+            active_bot_instances["comment_bot"].stop()
+        except Exception:
+            pass
+    return {"status": "stopped"}
+
+@app.post("/api/comment-bot/start")
+def start_comment_bot(req: CommentBotRequest):
+    if running_tasks["comment_bot"]["running"]:
+        return {"status": "already_running"}
+
+    running_tasks["comment_bot"]["running"] = True
+    running_tasks["comment_bot"]["logs"] = [
+        f"[{datetime.now().strftime('%H:%M:%S')}] ⏳ Đang khởi tạo Bot bình luận nhóm..."
+    ]
+    running_tasks["comment_bot"]["stats"] = {
+        "commented": 0,
+        "liked": 0,
+        "skipped": 0,
+        "errors": 0,
+        "total_target": req.max_comments
+    }
+
+    def run_comment_task():
+        bm = None
+        try:
+            cookies, used_profile = get_cookies_with_fallback(req.profile_path)
+            prof_name = os.path.basename(used_profile) if used_profile else "Mặc định"
+            running_tasks["comment_bot"]["logs"].append(
+                f"[{datetime.now().strftime('%H:%M:%S')}] 🔑 Đọc cookies từ Chrome Profile: '{prof_name}' ({len(cookies)} cookies)..."
+            )
+            if not cookies:
+                running_tasks["comment_bot"]["logs"].append(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Cảnh báo: Không tìm thấy cookie Facebook trong Chrome! Bạn nên chọn profile đã đăng nhập ở sidebar."
+                )
+
+            running_tasks["comment_bot"]["logs"].append(
+                f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Khởi động trình duyệt Playwright (Headless={req.headless})..."
+            )
+            bm = BrowserManager(headless=req.headless, cookies=cookies)
+            bm.start()
+            page = bm.new_page()
+
+            bot = FacebookGroupCommentBot(page=page)
+            active_bot_instances["comment_bot"] = bot
+
+            def on_log(msg: str):
+                formatted = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
+                running_tasks["comment_bot"]["logs"].append(formatted)
+
+            def on_stats(st: dict):
+                running_tasks["comment_bot"]["stats"] = dict(st)
+
+            stats = bot.run(
+                group_urls=req.group_urls,
+                max_comments=req.max_comments,
+                safe_delay_min=req.delay_min,
+                safe_delay_max=req.delay_max,
+                mode=req.mode,
+                ai_persona=req.ai_persona,
+                ai_custom_prompt=req.ai_custom_prompt,
+                templates=req.templates,
+                keywords=req.keywords,
+                filter_scam=req.filter_scam,
+                auto_like=req.auto_like,
+                skip_already_commented=req.skip_already_commented,
+                log_callback=on_log,
+                stats_callback=on_stats
+            )
+            running_tasks["comment_bot"]["stats"] = stats
+        except Exception as e:
+            running_tasks["comment_bot"]["logs"].append(
+                f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Lỗi bot comment: {str(e)}"
+            )
+        finally:
+            active_bot_instances["comment_bot"] = None
+            if bm:
+                try:
+                    bm.close()
+                except Exception:
+                    pass
+            running_tasks["comment_bot"]["running"] = False
+
+    threading.Thread(target=run_comment_task, daemon=True).start()
+    return {"status": "started"}
+
+@app.get("/api/comment-bot/history")
+def get_comment_history(limit: int = 200):
+    history = get_group_comments_history(limit=limit)
+    return {"history": history, "total": len(history)}
+
+@app.post("/api/comment-bot/history/clear")
+def clear_comment_history_api():
+    success = clear_group_comments_history()
     return {"success": success}
 
 # --- AI Analyzer & Copilot ---

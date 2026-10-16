@@ -35,6 +35,7 @@ from src.exporter import DataExporter, export_to_excel, export_to_csv
 from src.parser import JobPost
 from src.chrome_profile import list_chrome_profiles, extract_facebook_cookies
 from src.interaction_bot import FacebookInteractionBot
+from src.group_comment_bot import FacebookGroupCommentBot
 from src.ai_analyzer import analyze_job_post, generate_smart_comment, call_local_llm
 from src.database import (
     init_db,
@@ -46,6 +47,8 @@ from src.database import (
     get_database_stats,
     clear_database,
     get_cached_ai_analysis,
+    get_group_comments_history,
+    clear_group_comments_history,
 )
 
 st.set_page_config(
@@ -601,9 +604,10 @@ else:
     col_agent = None
 
 with col_main:
-    tab_scraper, tab_bot, tab_mcp = st.tabs([
+    tab_scraper, tab_comment_bot, tab_bot, tab_mcp = st.tabs([
         "📊 Cào tin tuyển dụng",
-        "🤖 Tương tác tự động (Auto Bot)",
+        "💬 Tự động bình luận nhóm",
+        "🤖 Tương tác Feed (Auto Bot)",
         "🔌 Cấu hình MCP Server"
     ])
 
@@ -812,7 +816,158 @@ with col_main:
 
 
 
-    # ----------------- TAB 2: TƯƠNG TÁC TỰ ĐỘNG (AUTO BOT) -----------------
+    # ----------------- TAB: TỰ ĐỘNG BÌNH LUẬN NHÓM (GROUP AUTO-COMMENT) -----------------
+    with tab_comment_bot:
+        st.subheader("💬 Tự Động Bình Luận Bài Viết Trong Nhóm (Group Auto-Comment)")
+        st.caption("Quét bài viết mới nhất trên nhóm, Like bài, phân tích nội dung và bình luận thông minh bằng AI hoặc Mẫu Spintax chống spam.")
+
+        col_cmt1, col_cmt2 = st.columns([1, 1])
+
+        with col_cmt1:
+            cmt_group_urls_input = st.text_area(
+                "Danh sách link Group Facebook (mỗi dòng 1 link):",
+                value="https://www.facebook.com/groups/tieuhochanoi",
+                height=90,
+                key="cmt_group_urls"
+            )
+
+            cmt_mode = st.radio(
+                "Chế độ tạo nội dung bình luận:",
+                options=["🧠 AI Thông Minh (Smart AI)", "📝 Mẫu Bình Luận / Spintax"],
+                index=0,
+                key="cmt_mode_select"
+            )
+
+            if "AI" in cmt_mode:
+                cmt_ai_persona = st.selectbox(
+                    "Phong cách AI (Persona):",
+                    options=[
+                        "ứng viên xin việc chuyên nghiệp",
+                        "người tìm việc thân thiện và nhiệt tình",
+                        "đồng nghiệp trao đổi chuyên môn",
+                        "thành viên tích cực của nhóm",
+                        "khách hàng quan tâm dịch vụ"
+                    ],
+                    index=0,
+                    key="cmt_ai_persona"
+                )
+                cmt_ai_prompt = st.text_input(
+                    "Gợi ý thêm cho AI (Tùy chọn):",
+                    value="",
+                    placeholder="Vd: Luôn xin phép gửi CV qua inbox...",
+                    key="cmt_ai_prompt"
+                )
+                cmt_templates_list = []
+            else:
+                cmt_ai_persona = "ứng viên xin việc chuyên nghiệp"
+                cmt_ai_prompt = None
+                cmt_templates_text = st.text_area(
+                    "Mẫu bình luận (mỗi dòng 1 câu, hỗ trợ Spintax {A|B|C}):",
+                    value="{Chào bạn|Hi bạn|Chào ad}, {mình quan tâm|cho mình xin thêm thông tin|inbox trao đổi thêm nhé} ạ!\nUp bài giúp bạn nhé, bài viết rất hữu ích!\nChấm bài ạ, inbox mình thêm thông tin với nhé bạn!",
+                    height=100,
+                    key="cmt_templates_text"
+                )
+                cmt_templates_list = [t.strip() for t in cmt_templates_text.splitlines() if t.strip()]
+
+            cmt_keywords_input = st.text_input(
+                "Lọc theo từ khóa (cách nhau bởi dấu phẩy, để trống để comment mọi bài mới):",
+                value="",
+                placeholder="vd: tuyển, tìm, gia sư, remote",
+                key="cmt_keywords_input"
+            )
+
+        with col_cmt2:
+            st.markdown("#### 🛡️ Cấu hình An toàn & Tùy chọn")
+            cmt_auto_like = st.checkbox("👍 Thả Like trước khi comment", value=True, key="cmt_auto_like")
+            cmt_filter_scam = st.checkbox("🚨 AI lọc bỏ bài viết nghi vấn lừa đảo / cọc tiền", value=True, key="cmt_filter_scam")
+            cmt_skip_existing = st.checkbox("🛡️ Bỏ qua bài đã từng comment (tránh comment lặp)", value=True, key="cmt_skip_existing")
+            cmt_headless = st.checkbox("Chạy ẩn trình duyệt (Headless)", value=False, key="cmt_headless")
+
+            cmt_max_posts = st.number_input("Số bài comment tối đa:", min_value=1, max_value=50, value=5, step=1, key="cmt_max_posts")
+            cmt_delays = st.slider(
+                "Khoảng thời gian nghỉ ngẫu nhiên giữa 2 lần comment (giây):",
+                min_value=5,
+                max_value=60,
+                value=(15, 30),
+                key="cmt_delay_slider",
+                help="Giãn cách từ 15-30 giây là khoảng an toàn được khuyến nghị để bảo vệ tài khoản."
+            )
+
+        btn_start_cmt = st.button("🚀 Bắt đầu Auto-Comment Nhóm", type="primary", key="btn_start_cmt_bot")
+
+        if btn_start_cmt:
+            cmt_urls = [u.strip() for u in cmt_group_urls_input.splitlines() if u.strip()]
+            if not cmt_urls:
+                st.error("Vui lòng nhập ít nhất 1 link Group Facebook!")
+            else:
+                cmt_status_box = st.empty()
+                cmt_log_box = st.empty()
+                cmt_logs = []
+
+                def cmt_log(msg: str):
+                    cmt_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+                    cmt_log_box.code("\n".join(cmt_logs[-12:]), language="bash")
+
+                with st.spinner("Bot đang quét bài viết và đăng bình luận trong nhóm..."):
+                    bm = BrowserManager(headless=cmt_headless, cookies=active_cookies)
+                    try:
+                        cmt_log("Đang khởi động trình duyệt Playwright...")
+                        bm.start()
+                        page = bm.new_page()
+                        bot = FacebookGroupCommentBot(page=page)
+
+                        kw_list = [k.strip() for k in cmt_keywords_input.split(",") if k.strip()]
+                        stats = bot.run(
+                            group_urls=cmt_urls,
+                            max_comments=int(cmt_max_posts),
+                            safe_delay_min=float(cmt_delays[0]),
+                            safe_delay_max=float(cmt_delays[1]),
+                            mode="ai" if "AI" in cmt_mode else "template",
+                            ai_persona=cmt_ai_persona,
+                            ai_custom_prompt=cmt_ai_prompt,
+                            templates=cmt_templates_list,
+                            keywords=kw_list,
+                            filter_scam=cmt_filter_scam,
+                            auto_like=cmt_auto_like,
+                            skip_already_commented=cmt_skip_existing,
+                            log_callback=cmt_log
+                        )
+
+                        cmt_status_box.success(
+                            f"🎉 Hoàn thành phiên Auto-Comment! "
+                            f"💬 Đã bình luận: {stats.get('commented', 0)} | "
+                            f"👍 Đã Like: {stats.get('liked', 0)} | "
+                            f"⏭️ Bỏ qua: {stats.get('skipped', 0)} | "
+                            f"❌ Lỗi: {stats.get('errors', 0)}"
+                        )
+                    except Exception as ex:
+                        cmt_status_box.error(f"Đã xảy ra lỗi: {ex}")
+                    finally:
+                        bm.close()
+
+        # Hiển thị lịch sử comment
+        history_comments = get_group_comments_history(100)
+        if history_comments:
+            st.markdown("---")
+            st.markdown("#### 📜 Lịch sử bình luận gần nhất")
+            df_hist = pd.DataFrame(history_comments)
+            rename_hist = {
+                "created_at": "Thời gian",
+                "group_name": "Nhóm",
+                "author_name": "Người đăng",
+                "comment_text": "Bình luận",
+                "content_snippet": "Trích đoạn bài viết",
+                "status": "Trạng thái",
+                "post_url": "Link bài viết"
+            }
+            display_hist = df_hist[[c for c in rename_hist.keys() if c in df_hist.columns]].rename(columns=rename_hist)
+            st.dataframe(display_hist, height=250, width="stretch")
+            if st.button("🗑️ Xóa toàn bộ lịch sử comment", key="btn_clear_cmt_hist"):
+                clear_group_comments_history()
+                st.success("Đã xóa lịch sử comment!")
+                st.rerun()
+
+    # ----------------- TAB 3: TƯƠNG TÁC TỰ ĐỘNG (AUTO BOT) -----------------
     with tab_bot:
         st.subheader("🤖 Tự Động Lướt Feed, Thả Like, Bình Luận & Kết Bạn")
         st.caption("Mô phỏng hành vi người dùng thật với thời gian chờ ngẫu nhiên để bảo vệ an toàn tài khoản tối đa.")

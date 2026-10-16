@@ -148,6 +148,23 @@ def init_db(db_path: Optional[str] = None) -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_friend_url ON sent_friend_requests (profile_url)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_friend_group ON sent_friend_requests (group_url)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS group_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id TEXT,
+                post_url TEXT,
+                group_url TEXT,
+                group_name TEXT,
+                author_name TEXT,
+                content_snippet TEXT,
+                comment_text TEXT,
+                status TEXT DEFAULT 'posted',
+                created_at TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_comment_post ON group_comments (post_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_comment_group ON group_comments (group_url);")
         conn.commit()
     finally:
         conn.close()
@@ -592,4 +609,132 @@ def clear_friend_requests(db_path: Optional[str] = None) -> bool:
         return False
     finally:
         conn.close()
+
+
+def save_group_comment(
+    post_id: str,
+    post_url: str = "",
+    group_url: str = "",
+    group_name: str = "",
+    author_name: str = "",
+    content_snippet: str = "",
+    comment_text: str = "",
+    status: str = "posted",
+    db_path: Optional[str] = None
+) -> bool:
+    """Lưu lịch sử một bình luận đã đăng lên bài viết trong nhóm Facebook."""
+    init_db(db_path)
+    path = get_db_path(db_path)
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.cursor()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            """
+            INSERT INTO group_comments (post_id, post_url, group_url, group_name, author_name, content_snippet, comment_text, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(post_id).strip(),
+                str(post_url or "").strip(),
+                str(group_url or "").strip(),
+                str(group_name or "").strip(),
+                str(author_name or "").strip(),
+                str(content_snippet or "")[:300].strip(),
+                str(comment_text or "").strip(),
+                str(status or "posted"),
+                now_str
+            )
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Lỗi khi lưu group comment: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_commented_post_ids(group_url: Optional[str] = None, db_path: Optional[str] = None) -> Set[str]:
+    """Lấy danh sách post_id hoặc post_url đã được comment để tránh comment trùng lặp."""
+    init_db(db_path)
+    path = get_db_path(db_path)
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.cursor()
+        if group_url:
+            clean_url = group_url.split("?")[0].rstrip("/")
+            cursor.execute("SELECT post_id, post_url FROM group_comments WHERE group_url LIKE ? AND status = 'posted'", (f"%{clean_url}%",))
+        else:
+            cursor.execute("SELECT post_id, post_url FROM group_comments WHERE status = 'posted'")
+        rows = cursor.fetchall()
+        result_set = set()
+        for p_id, p_url in rows:
+            if p_id:
+                result_set.add(str(p_id).strip())
+            if p_url:
+                result_set.add(str(p_url).strip().rstrip("/"))
+        return result_set
+    except Exception as e:
+        logger.error(f"Lỗi khi lấy danh sách bài đã comment: {e}")
+        return set()
+    finally:
+        conn.close()
+
+
+def get_group_comments_history(limit: int = 200, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lấy lịch sử các bình luận đã đăng gần nhất."""
+    init_db(db_path)
+    path = get_db_path(db_path)
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, post_id, post_url, group_url, group_name, author_name, content_snippet, comment_text, status, created_at
+            FROM group_comments
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        rows = cursor.fetchall()
+        results = []
+        for r in rows:
+            results.append({
+                "id": r[0],
+                "post_id": r[1] or "",
+                "post_url": r[2] or "",
+                "group_url": r[3] or "",
+                "group_name": r[4] or "",
+                "author_name": r[5] or "",
+                "content_snippet": r[6] or "",
+                "comment_text": r[7] or "",
+                "status": r[8] or "posted",
+                "created_at": r[9] or ""
+            })
+        return results
+    except Exception as e:
+        logger.error(f"Lỗi khi lấy lịch sử group comments: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def clear_group_comments_history(db_path: Optional[str] = None) -> bool:
+    """Xóa toàn bộ lịch sử comment nhóm."""
+    init_db(db_path)
+    path = get_db_path(db_path)
+    conn = sqlite3.connect(path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM group_comments")
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Lỗi khi xóa bảng group_comments: {e}")
+        return False
+    finally:
+        conn.close()
+
 

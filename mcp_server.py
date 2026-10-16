@@ -18,6 +18,7 @@ from src.chrome_profile import list_chrome_profiles as _list_profiles, extract_f
 from src.browser import BrowserManager
 from src.scraper import FacebookGroupScraper
 from src.interaction_bot import FacebookInteractionBot
+from src.group_comment_bot import FacebookGroupCommentBot
 from src.ai_analyzer import analyze_job_post as _analyze_job_post, generate_smart_comment
 from src.database import save_posts_batch, get_database_stats as _get_db_stats, clear_database as _clear_db
 
@@ -208,6 +209,75 @@ def interact_facebook_feed(
         }
     except Exception as e:
         logger.error(f"Lỗi tương tác bot: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        bm.close()
+
+
+@app.tool()
+def auto_comment_group_posts(
+    group_url: str,
+    max_comments: int = 5,
+    mode: str = "ai",
+    ai_persona: str = "ứng viên xin việc chuyên nghiệp",
+    comments_template: str = "Quan tâm ạ!\nUp bài giúp bạn nhé!",
+    keywords: str = "",
+    filter_scam: bool = True,
+    auto_like: bool = True,
+    skip_already_commented: bool = True,
+    safe_delay_min: float = 15.0,
+    safe_delay_max: float = 30.0,
+    headless: bool = True,
+    profile_name: str = ""
+) -> Dict[str, Any]:
+    """
+    Tự động quét các bài viết mới trong Nhóm Facebook (Group), thả cảm xúc (Like)
+    và đăng bình luận thông minh (sử dụng AI hoặc mẫu Spintax) an toàn chống checkpoint.
+    Args:
+        group_url: Đường dẫn nhóm Facebook (vd: https://www.facebook.com/groups/vieclamit)
+        max_comments: Số lượng bình luận tối đa cần đăng
+        mode: 'ai' (sinh bình luận thông minh bằng AI) hoặc 'template' (chọn từ mẫu bình luận)
+        ai_persona: Phong cách viết của AI (vd: 'ứng viên xin việc chuyên nghiệp', 'người tìm việc thân thiện')
+        comments_template: Danh sách các mẫu bình luận dự phòng hoặc spintax (mỗi dòng 1 mẫu)
+        keywords: Từ khóa lọc bài viết phân cách bởi dấu phẩy (nếu để trống sẽ comment vào bài mới nhất)
+        filter_scam: Tự động bỏ qua các bài viết nghi vấn lừa đảo/cọc tiền
+        auto_like: Tự động thả Like bài viết trước khi bình luận
+        skip_already_commented: Bỏ qua các bài viết đã từng bình luận trong quá khứ
+        safe_delay_min: Thời gian chờ tối thiểu giữa 2 lần comment (giây)
+        safe_delay_max: Thời gian chờ tối đa giữa 2 lần comment (giây)
+        headless: True để chạy ẩn, False để hiện trình duyệt
+        profile_name: Tên Chrome Profile đăng nhập sẵn Facebook
+    """
+    logger.info(f"Bắt đầu tác vụ Auto-Comment Group tại {group_url}")
+    cookies = _get_cookies_for_profile(profile_name)
+
+    templates_list = [c.strip() for c in comments_template.splitlines() if c.strip()]
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
+
+    bm = BrowserManager(headless=headless, cookies=cookies)
+    try:
+        bm.start()
+        page = bm.new_page()
+        bot = FacebookGroupCommentBot(page=page)
+        stats = bot.run(
+            group_urls=[group_url],
+            max_comments=max_comments,
+            safe_delay_min=safe_delay_min,
+            safe_delay_max=safe_delay_max,
+            mode=mode,
+            ai_persona=ai_persona,
+            templates=templates_list,
+            keywords=kw_list,
+            filter_scam=filter_scam,
+            auto_like=auto_like,
+            skip_already_commented=skip_already_commented,
+        )
+        return {
+            "status": "success",
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"Lỗi comment bot: {e}")
         return {"status": "error", "error": str(e)}
     finally:
         bm.close()

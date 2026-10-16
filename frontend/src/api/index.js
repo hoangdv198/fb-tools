@@ -108,6 +108,36 @@ export const api = {
     return res.json();
   },
 
+  // Group Auto-Comment Bot
+  async startCommentBot(params) {
+    const res = await fetch('/api/comment-bot/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    return res.json();
+  },
+
+  async getCommentBotStatus() {
+    const res = await fetch('/api/comment-bot/status');
+    return res.json();
+  },
+
+  async stopCommentBot() {
+    const res = await fetch('/api/comment-bot/stop', { method: 'POST' });
+    return res.json();
+  },
+
+  async getCommentHistory(limit = 200) {
+    const res = await fetch(`/api/comment-bot/history?limit=${limit}`);
+    return res.json();
+  },
+
+  async clearCommentHistory() {
+    const res = await fetch('/api/comment-bot/history/clear', { method: 'POST' });
+    return res.json();
+  },
+
   // AI Copilot
   async batchAnalyze(forceReanalyze = false) {
     const res = await fetch('/api/ai/batch-analyze', {

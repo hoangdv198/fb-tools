@@ -6,10 +6,11 @@ import SystemSidebar from './components/SystemSidebar';
 import ScraperWorkspace from './components/ScraperWorkspace';
 import BotWorkspace from './components/BotWorkspace';
 import FriendBotWorkspace from './components/FriendBotWorkspace';
+import CommentBotWorkspace from './components/CommentBotWorkspace';
 import McpWorkspace from './components/McpWorkspace';
 import CopilotDrawer from './components/CopilotDrawer';
 import PostDetailModal from './components/PostDetailModal';
-import { Globe, Bot, UserPlus, Cpu, Sparkles } from 'lucide-react';
+import { Globe, Bot, UserPlus, MessageSquareQuote, Cpu, Sparkles } from 'lucide-react';
 
 export default function App() {
   // Navigation & Panels (Cached in localStorage)
@@ -64,6 +65,25 @@ export default function App() {
   const [friendBotLogs, setFriendBotLogs] = useState([]);
   const [friendBotStats, setFriendBotStats] = useState({ sent: 0, skipped: 0, errors: 0, total_target: 20 });
 
+  // Group Auto-Comment Bot State (Cached in localStorage)
+  const [commentGroupUrls, setCommentGroupUrls] = useLocalStorage('fb_commentGroupUrls', 'https://www.facebook.com/groups/vieclamit');
+  const [commentMaxPosts, setCommentMaxPosts] = useLocalStorage('fb_commentMaxPosts', 10);
+  const [commentDelayMin, setCommentDelayMin] = useLocalStorage('fb_commentDelayMin', 15);
+  const [commentDelayMax, setCommentDelayMax] = useLocalStorage('fb_commentDelayMax', 30);
+  const [commentMode, setCommentMode] = useLocalStorage('fb_commentMode', 'ai');
+  const [commentAIPersona, setCommentAIPersona] = useLocalStorage('fb_commentAIPersona', 'ứng viên xin việc chuyên nghiệp');
+  const [commentAICustomPrompt, setCommentAICustomPrompt] = useLocalStorage('fb_commentAICustomPrompt', '');
+  const [commentTemplates, setCommentTemplates] = useLocalStorage('fb_commentTemplates', '{Chào bạn|Hi bạn|Chào ad}, {mình quan tâm|cho mình xin thêm thông tin|inbox trao đổi thêm nhé} ạ!\nUp bài giúp bạn nhé, bài viết rất hữu ích!\nChấm bài ạ, inbox mình thêm thông tin với nhé bạn!');
+  const [commentKeywords, setCommentKeywords] = useLocalStorage('fb_commentKeywords', '');
+  const [commentAutoLike, setCommentAutoLike] = useLocalStorage('fb_commentAutoLike', true);
+  const [commentFilterScam, setCommentFilterScam] = useLocalStorage('fb_commentFilterScam', true);
+  const [commentSkipExisting, setCommentSkipExisting] = useLocalStorage('fb_commentSkipExisting', true);
+  const [commentHeadless, setCommentHeadless] = useLocalStorage('fb_commentHeadless', false);
+  const [commentBotRunning, setCommentBotRunning] = useState(false);
+  const [commentBotLogs, setCommentBotLogs] = useState([]);
+  const [commentBotStats, setCommentBotStats] = useState({ commented: 0, liked: 0, skipped: 0, errors: 0, total_target: 10 });
+
+
   // Copilot State
   const [chatMessages, setChatMessages] = useState([
     {
@@ -89,7 +109,7 @@ export default function App() {
   // Poll running jobs
   useEffect(() => {
     let interval = null;
-    if (scraperRunning || botRunning || friendBotRunning) {
+    if (scraperRunning || botRunning || friendBotRunning || commentBotRunning) {
       interval = setInterval(async () => {
         if (scraperRunning) {
           const res = await api.getScraperStatus();
@@ -114,10 +134,18 @@ export default function App() {
             setFriendBotRunning(false);
           }
         }
+        if (commentBotRunning) {
+          const res = await api.getCommentBotStatus();
+          setCommentBotLogs(res.logs || []);
+          setCommentBotStats(res.stats || { commented: 0, liked: 0, skipped: 0, errors: 0, total_target: commentMaxPosts });
+          if (!res.running) {
+            setCommentBotRunning(false);
+          }
+        }
       }, 1500);
     }
     return () => clearInterval(interval);
-  }, [scraperRunning, botRunning, friendBotRunning, friendMaxRequests]);
+  }, [scraperRunning, botRunning, friendBotRunning, commentBotRunning, friendMaxRequests, commentMaxPosts]);
 
   // Chat auto-scroll
   useEffect(() => {
@@ -270,6 +298,49 @@ export default function App() {
       console.error(e);
     }
   };
+
+  const handleStartCommentBot = async () => {
+    const urls = commentGroupUrls.split('\n').map(u => u.trim()).filter(Boolean);
+    if (!urls.length) {
+      alert('Vui lòng nhập ít nhất 1 đường dẫn Nhóm Facebook!');
+      return;
+    }
+    setCommentBotRunning(true);
+    setCommentBotLogs([]);
+    setCommentBotStats({ commented: 0, liked: 0, skipped: 0, errors: 0, total_target: parseInt(commentMaxPosts) || 10 });
+    try {
+      const templatesList = commentTemplates.split('\n').map(t => t.trim()).filter(Boolean);
+      const kws = commentKeywords.split(',').map(k => k.trim()).filter(Boolean);
+      await api.startCommentBot({
+        profile_path: selectedProfile,
+        group_urls: urls,
+        max_comments: parseInt(commentMaxPosts) || 10,
+        delay_min: parseFloat(commentDelayMin) || 15,
+        delay_max: parseFloat(commentDelayMax) || 30,
+        mode: commentMode,
+        ai_persona: commentAIPersona,
+        ai_custom_prompt: commentAICustomPrompt,
+        templates: templatesList,
+        keywords: kws,
+        filter_scam: commentFilterScam,
+        auto_like: commentAutoLike,
+        skip_already_commented: commentSkipExisting,
+        headless: commentHeadless
+      });
+    } catch (e) {
+      console.error(e);
+      setCommentBotRunning(false);
+    }
+  };
+
+  const handleStopCommentBot = async () => {
+    try {
+      await api.stopCommentBot();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
 
   const handleBatchAI = async () => {
     setChatLoading(true);
@@ -470,6 +541,29 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('comment_bot')}
+              style={{
+                height: 34,
+                padding: '0 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                color: activeTab === 'comment_bot' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                backgroundColor: activeTab === 'comment_bot' ? 'var(--bg-primary)' : 'transparent',
+                borderTop: activeTab === 'comment_bot' ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                borderLeft: activeTab === 'comment_bot' ? '1px solid var(--border-color)' : '1px solid transparent',
+                borderRight: activeTab === 'comment_bot' ? '1px solid var(--border-color)' : '1px solid transparent',
+                borderBottom: 'none',
+                borderRadius: '4px 4px 0 0'
+              }}
+            >
+              <MessageSquareQuote size={14} color="var(--accent-blue)" />
+              <span>💬 Auto-Comment Nhóm</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('mcp')}
               style={{
                 height: 34,
@@ -591,6 +685,43 @@ export default function App() {
               onStopFriendBot={handleStopFriendBot}
               friendBotLogs={friendBotLogs}
               friendBotStats={friendBotStats}
+            />
+          )}
+
+          {activeTab === 'comment_bot' && (
+            <CommentBotWorkspace
+              selectedProfile={selectedProfile}
+              commentGroupUrls={commentGroupUrls}
+              setCommentGroupUrls={setCommentGroupUrls}
+              commentMaxPosts={commentMaxPosts}
+              setCommentMaxPosts={setCommentMaxPosts}
+              commentDelayMin={commentDelayMin}
+              setCommentDelayMin={setCommentDelayMin}
+              commentDelayMax={commentDelayMax}
+              setCommentDelayMax={setCommentDelayMax}
+              commentMode={commentMode}
+              setCommentMode={setCommentMode}
+              commentAIPersona={commentAIPersona}
+              setCommentAIPersona={setCommentAIPersona}
+              commentAICustomPrompt={commentAICustomPrompt}
+              setCommentAICustomPrompt={setCommentAICustomPrompt}
+              commentTemplates={commentTemplates}
+              setCommentTemplates={setCommentTemplates}
+              commentKeywords={commentKeywords}
+              setCommentKeywords={setCommentKeywords}
+              commentAutoLike={commentAutoLike}
+              setCommentAutoLike={setCommentAutoLike}
+              commentFilterScam={commentFilterScam}
+              setCommentFilterScam={setCommentFilterScam}
+              commentSkipExisting={commentSkipExisting}
+              setCommentSkipExisting={setCommentSkipExisting}
+              commentHeadless={commentHeadless}
+              setCommentHeadless={setCommentHeadless}
+              commentBotRunning={commentBotRunning}
+              onStartCommentBot={handleStartCommentBot}
+              onStopCommentBot={handleStopCommentBot}
+              commentBotLogs={commentBotLogs}
+              commentBotStats={commentBotStats}
             />
           )}
 

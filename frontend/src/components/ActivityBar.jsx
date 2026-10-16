@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Globe, Bot, UserPlus, Cpu, Sparkles } from 'lucide-react';
+import { Layers, Globe, Bot, UserPlus, MessageSquareQuote, Cpu, Sparkles } from 'lucide-react';
 
 export default function ActivityBar({
   activeTab,
@@ -73,6 +73,19 @@ export default function ActivityBar({
         }}
       >
         <UserPlus size={20} />
+      </button>
+
+      <button
+        onClick={() => setActiveTab('comment_bot')}
+        title="Tự động bình luận nhóm (Group Auto-Comment)"
+        style={{
+          color: activeTab === 'comment_bot' ? '#3b82f6' : 'var(--text-secondary)',
+          padding: 8,
+          borderRadius: 6,
+          background: activeTab === 'comment_bot' ? 'var(--bg-hover)' : 'transparent'
+        }}
+      >
+        <MessageSquareQuote size={20} />
       </button>
 
       <button

@@ -338,13 +338,27 @@ class FacebookGroupFriendBot:
                         pass
                     self._sleep_interruptible(random.uniform(0.5, 1.2))
 
-                    # Bấm nút Thêm bạn bè
+                    # Bấm nút Thêm bạn bè với cơ chế click vật lý mô phỏng chuột thật
+                    click_success = False
                     try:
-                        btn.click(timeout=2000)
+                        # 1. Thử click trực tiếp bằng Playwright event với tọa độ thật
+                        btn.click(timeout=3000, force=False)
+                        click_success = True
                     except Exception:
-                        btn.evaluate("(b) => b.click()")
+                        try:
+                            # 2. Dự phòng: Dispatch click bằng JS đầy đủ sự kiện chuột mousedown/mouseup
+                            btn.evaluate("""(b) => {
+                                b.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                const opts = { bubbles: true, cancelable: true, view: window };
+                                b.dispatchEvent(new MouseEvent('mousedown', opts));
+                                b.dispatchEvent(new MouseEvent('mouseup', opts));
+                                b.dispatchEvent(new MouseEvent('click', opts));
+                            }""")
+                            click_success = True
+                        except Exception as e:
+                            logger.debug(f"Click nút thất bại: {e}")
 
-                    self._sleep_interruptible(1.0)
+                    self._sleep_interruptible(1.5)
 
                     # Xử lý nếu có popup xác nhận của Facebook
                     self.handle_confirmation_dialog(log)
@@ -356,6 +370,47 @@ class FacebookGroupFriendBot:
                         log("🛑 Dừng tiến trình ngay!")
                         self._stopped = True
                         break
+
+                    # XÁC THỰC THỰC TẾ (VERIFY): Kiểm tra xem nút hoặc khu vực đã chuyển sang trạng thái đã gửi chưa
+                    is_verified_sent = False
+                    for _ in range(3):
+                        try:
+                            # Kiểm tra text trên nút hoặc container quanh nút
+                            btn_text = (btn.inner_text(timeout=1000) or "").lower()
+                            parent_text = btn.evaluate("""(b) => {
+                                const p = b.closest('div[role="button"]') || b.parentElement || b;
+                                return (p.innerText || '').toLowerCase();
+                            }""")
+                            
+                            sent_indicators = [
+                                "hủy lời mời", "cancel request", "đã gửi lời mời", 
+                                "lời mời đã gửi", "request sent", "requested", "chờ phản hồi", "hủy"
+                            ]
+                            
+                            if any(ind in btn_text or ind in parent_text for ind in sent_indicators):
+                                is_verified_sent = True
+                                break
+                            
+                            # Nếu nút Thêm bạn bè đã biến mất khỏi DOM thì cũng tính là gửi thành công
+                            if not btn.is_visible(timeout=500):
+                                is_verified_sent = True
+                                break
+                        except Exception:
+                            # Nút có thể đã bị unmount / re-render sau khi gửi
+                            is_verified_sent = True
+                            break
+                        time.sleep(0.8)
+
+                    if not is_verified_sent:
+                        stats["errors"] += 1
+                        notify_stats()
+                        log(f"⚠️ [Không ăn click] Không thể bấm gửi lời mời cho **{m_name}** (Facebook chặn click hoặc tài khoản bị giới hạn). Bỏ qua.")
+                        # Đánh dấu đã quét để tránh kẹt loop
+                        try:
+                            btn.evaluate("(b) => b.setAttribute('data-bot-processed', 'true')")
+                        except Exception:
+                            pass
+                        continue
 
                     # Ghi nhận thành công
                     stats["sent"] += 1
